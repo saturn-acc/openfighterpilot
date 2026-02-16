@@ -1,111 +1,143 @@
-<div align="center" style="text-align: center;">
+<div align="center">
 
-<h1>openpilot</h1>
+# OpenFighterPilot
 
-<p>
-  <b>openpilot is an operating system for robotics.</b>
-  <br>
-  Currently, it upgrades the driver assistance system in 300+ supported cars.
-</p>
+**Autonomous drone racing framework built on cereal messaging and PyBullet simulation.**
 
-<h3>
-  <a href="https://docs.comma.ai">Docs</a>
-  <span> · </span>
-  <a href="https://docs.comma.ai/contributing/roadmap/">Roadmap</a>
-  <span> · </span>
-  <a href="https://github.com/commaai/openpilot/blob/master/docs/CONTRIBUTING.md">Contribute</a>
-  <span> · </span>
-  <a href="https://discord.comma.ai">Community</a>
-  <span> · </span>
-  <a href="https://comma.ai/shop">Try it on a comma 3X</a>
-</h3>
+A multi-process flight control stack for developing and testing drone racing algorithms,
+forked from [openpilot](https://github.com/commaai/openpilot).
 
-Quick start: `bash <(curl -fsSL openpilot.comma.ai)`
-
-[![openpilot tests](https://github.com/commaai/openpilot/actions/workflows/tests.yaml/badge.svg)](https://github.com/commaai/openpilot/actions/workflows/tests.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![X Follow](https://img.shields.io/twitter/follow/comma_ai)](https://x.com/comma_ai)
-[![Discord](https://img.shields.io/discord/469524606043160576)](https://discord.comma.ai)
 
 </div>
 
-<table>
-  <tr>
-    <td><a href="https://youtu.be/NmBfgOanCyk" title="Video By Greer Viau"><img src="https://github.com/commaai/openpilot/assets/8762862/2f7112ae-f748-4f39-b617-fabd689c3772"></a></td>
-    <td><a href="https://youtu.be/VHKyqZ7t8Gw" title="Video By Logan LeGrand"><img src="https://github.com/commaai/openpilot/assets/8762862/92351544-2833-40d7-9e0b-7ef7ae37ec4c"></a></td>
-    <td><a href="https://youtu.be/SUIZYzxtMQs" title="A drive to Taco Bell"><img src="https://github.com/commaai/openpilot/assets/8762862/05ceefc5-2628-439c-a9b2-89ce77dc6f63"></a></td>
-  </tr>
-</table>
+## Overview
 
+OpenFighterPilot is a real-time drone racing platform with three layers of complexity:
 
-Using openpilot in a car
-------
+- **Gravity mode** — 2-process hover controller for basic testing
+- **Dummy mode** — single-process self-contained demo
+- **Race mode** — full 3-process pipeline with FPV camera, planning, and PID tracking control
 
-To use openpilot in a car, you need four things:
-1. **Supported Device:** a comma 3X, available at [comma.ai/shop](https://comma.ai/shop/comma-3x).
-2. **Software:** The setup procedure for the comma 3X allows users to enter a URL for custom software. Use the URL `openpilot.comma.ai` to install the release version.
-3. **Supported Car:** Ensure that you have one of [the 275+ supported cars](docs/CARS.md).
-4. **Car Harness:** You will also need a [car harness](https://comma.ai/shop/car-harness) to connect your comma 3X to your car.
+All inter-process communication uses [cereal](https://github.com/commaai/cereal) (Cap'n Proto over shared memory), giving each module a clean pub/sub interface at fixed rates.
 
-We have detailed instructions for [how to install the harness and device in a car](https://comma.ai/setup). Note that it's possible to run openpilot on [other hardware](https://blog.comma.ai/self-driving-car-for-free/), although it's not plug-and-play.
+## Architecture
 
+```
+Race Mode (3-process):
 
-### Branches
+  bridge_pybullet ──droneState (100Hz)──────> plannerd, controld
+  bridge_pybullet ──droneCameraState (20Hz)──> [future vision pipeline]
+  bridge_pybullet ──gateDetection (20Hz)────> [future vision pipeline]
+  plannerd ────────dronePlan (20Hz)─────────> controld
+  controld ────────droneControl (100Hz)─────> bridge_pybullet
+```
 
-Running `master` and other branches directly is supported, but it's recommended to run one of the following prebuilt branches:
+```
+Gravity Mode (2-process):
 
-| comma four branch      | comma 3X branch        | URL                                    | description                                                                         |
-|------------------------|------------------------|----------------------------------------|-------------------------------------------------------------------------------------|
-| `release-mici`         | `release-tizi`         | openpilot.comma.ai                     | This is openpilot's release branch.                                                 |
-| `release-mici-staging` | `release-tizi-staging` | openpilot-test.comma.ai                | This is the staging branch for releases. Use it to get new releases slightly early. |
-| `nightly`              | `nightly`              | openpilot-nightly.comma.ai             | This is the bleeding edge development branch. Do not expect this to be stable.      |
-| `nightly-dev`          | `nightly-dev`          | installer.comma.ai/commaai/nightly-dev | Same as nightly, but includes experimental development features for some cars.      |
+  bridge_drone ────droneState (100Hz)───> gravity_compensator
+  gravity_compensator ─droneControl (100Hz)─> bridge_drone
+```
 
-To start developing openpilot
-------
+## Quick Start
 
-openpilot is developed by [comma](https://comma.ai/) and by users like you. We welcome both pull requests and issues on [GitHub](http://github.com/commaai/openpilot).
+```bash
+# Clone
+git clone https://github.com/saturn-acc/openfighterpilot.git
+cd openfighterpilot
 
-* Join the [community Discord](https://discord.comma.ai)
-* Check out [the contributing docs](docs/CONTRIBUTING.md)
-* Check out the [openpilot tools](tools/)
-* Code documentation lives at https://docs.comma.ai
-* Information about running openpilot lives on the [community wiki](https://github.com/commaai/openpilot/wiki)
+# Install dependencies
+pip install -e '.[drone]'
 
-Want to get paid to work on openpilot? [comma is hiring](https://comma.ai/jobs#open-positions) and offers lots of [bounties](https://comma.ai/bounties) for external contributors.
+# Run headless (gravity hover)
+python main.py --controller gravity --seconds 10
 
-Safety and Testing
-----
+# Run the full racing stack
+python main.py --controller race --seconds 20
 
-* openpilot observes [ISO26262](https://en.wikipedia.org/wiki/ISO_26262) guidelines, see [SAFETY.md](docs/SAFETY.md) for more details.
-* openpilot has software-in-the-loop [tests](.github/workflows/tests.yaml) that run on every commit.
-* The code enforcing the safety model lives in panda and is written in C, see [code rigor](https://github.com/commaai/panda#code-rigor) for more details.
-* panda has software-in-the-loop [safety tests](https://github.com/commaai/panda/tree/master/tests/safety).
-* Internally, we have a hardware-in-the-loop Jenkins test suite that builds and unit tests the various processes.
-* panda has additional hardware-in-the-loop [tests](https://github.com/commaai/panda/blob/master/Jenkinsfile).
-* We run the latest openpilot in a testing closet containing 10 comma devices continuously replaying routes.
+# With PyBullet GUI (FPV chase cam)
+python main.py --controller race --gui --seconds 20
+```
 
-<details>
-<summary>MIT Licensed</summary>
+## Controller Modes
 
-openpilot is released under the MIT license. Some parts of the software are released under other licenses as specified.
+| Mode | Processes | Description |
+|------|-----------|-------------|
+| `gravity` | bridge_drone + gravity_compensator | Hover-only. Compensates for tilt to maintain altitude. |
+| `dummy` | single process | Self-contained demo. Validates cereal message round-trip. |
+| `race` | bridge_pybullet + plannerd + controld | Full stack. Fly-forward planner + PID velocity tracking + FPV camera. |
 
-Any user of this software shall indemnify and hold harmless Comma.ai, Inc. and its directors, officers, employees, agents, stockholders, affiliates, subcontractors and customers from and against all allegations, claims, actions, suits, demands, damages, liabilities, obligations, losses, settlements, judgments, costs and expenses (including without limitation attorneys’ fees and costs) which arise out of, relate to or result from any use of this software by user.
+### CLI Options
 
-**THIS IS ALPHA QUALITY SOFTWARE FOR RESEARCH PURPOSES ONLY. THIS IS NOT A PRODUCT.
-YOU ARE RESPONSIBLE FOR COMPLYING WITH LOCAL LAWS AND REGULATIONS.
-NO WARRANTY EXPRESSED OR IMPLIED.**
-</details>
+```
+python main.py [OPTIONS]
 
-<details>
-<summary>User Data and comma Account</summary>
+--controller {gravity,dummy,race}   Flight mode (default: gravity)
+--gui                               Open PyBullet GUI window
+--seconds N                         Stop after N seconds (0 = forever)
+--mass KG                           Quadrotor mass (default: 1.0)
+--max-thrust N                      Maximum thrust in Newtons (default: 20.0)
+```
 
-By default, openpilot uploads the driving data to our servers. You can also access your data through [comma connect](https://connect.comma.ai/). We use your data to train better models and improve openpilot for everyone.
+## Key Modules
 
-openpilot is open source software: the user is free to disable data collection if they wish to do so.
+| Module | Role |
+|--------|------|
+| `tools/sim/bridge_pybullet.py` | PyBullet sim with gates, FPV camera (320x240 RGB at 20Hz), chase cam GUI |
+| `tools/sim/bridge_drone.py` | Minimal PyBullet sim (no gates, no camera) |
+| `selfdrive/controls/plannerd.py` | Fly-forward planner: 2 m/s forward + altitude hold at 1m |
+| `selfdrive/controls/controld.py` | PID velocity controller (4 axes) at 100Hz |
+| `selfdrive/controls/gravity_compensator.py` | Tilt-compensated hover: `thrust = mg / cos(tilt)` |
+| `selfdrive/controls/visiond.py` | Gate detection to body-relative error vectors (reserved for future use) |
+| `selfdrive/controls/dummy_planner.py` | Single-process demo (no messaging) |
+| `cereal/log.capnp` | Cap'n Proto schema for all drone messages |
+| `cereal/services.py` | Service registry (frequencies, queue sizes) |
 
-openpilot logs the road-facing cameras, CAN, GPS, IMU, magnetometer, thermal sensors, crashes, and operating system logs.
-The driver-facing camera and microphone are only logged if you explicitly opt-in in settings.
+## Message Types
 
-By using openpilot, you agree to [our Privacy Policy](https://comma.ai/privacy). You understand that use of this software or its related services will generate certain types of user data, which may be logged and stored at the sole discretion of comma. By accepting this agreement, you grant an irrevocable, perpetual, worldwide right to comma for the use of this data.
-</details>
+| Message | Rate | Contents |
+|---------|------|----------|
+| `droneState` | 100Hz | Position, velocity, attitude (quaternion), angular rates, battery |
+| `droneControl` | 100Hz | Throttle (0-1), roll/pitch/yaw commands, armed state |
+| `dronePlan` | 20Hz | Desired velocity (world frame), desired yaw, target position |
+| `droneCameraState` | 20Hz | Raw RGB image (320x240), frame ID, timestamp |
+| `gateDetection` | 20Hz | Relative gate position, dimensions, confidence, distance |
+
+## Project Structure
+
+```
+openfighterpilot/
+  main.py                          # Entry point — launches processes by mode
+  cereal/
+    log.capnp                      # Message schemas (DroneState, DronePlan, etc.)
+    services.py                    # Service frequencies and queue sizes
+  selfdrive/controls/
+    plannerd.py                    # Fly-forward planner (20Hz)
+    controld.py                    # PID flight controller (100Hz)
+    gravity_compensator.py         # Hover controller (100Hz)
+    visiond.py                     # Vision pipeline (future use)
+    dummy_planner.py               # Single-process demo
+  tools/sim/
+    bridge_pybullet.py             # Full sim: physics + gates + FPV camera
+    bridge_drone.py                # Minimal sim: physics only
+    assets/quadrotor.urdf          # Drone model (1kg, 24cm diagonal)
+```
+
+## Roadmap
+
+- [x] Multi-process cereal messaging architecture
+- [x] PyBullet physics simulation with URDF quadrotor
+- [x] PID velocity tracking controller
+- [x] FPV camera publishing (320x240 RGB at 20Hz)
+- [x] Visual gate markers in simulation
+- [ ] YOLOv8 gate detection from FPV images
+- [ ] Vision-based planning (replace dummy fly-forward)
+- [ ] Multi-gate race course
+- [ ] Lap timing and scoring
+
+## License
+
+MIT &mdash; see [LICENSE](LICENSE) for details.
+
+This project is forked from [openpilot](https://github.com/commaai/openpilot) by [comma.ai](https://comma.ai).
