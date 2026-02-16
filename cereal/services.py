@@ -89,6 +89,14 @@ _services: dict[str, tuple] = {
   "wideRoadEncodeData": (False, 20., None, QueueSize.BIG),
   "qRoadEncodeData": (False, 20., None, QueueSize.BIG),
 
+  # drone racing
+  "droneControl": (True, 100., 10),      # High frequency for flight control
+  "droneState": (True, 100., 10),        # High frequency for state telemetry
+  "gateDetection": (True, 20., 10),      # Gate detection from vision model
+  "targetObservation": (True, 20., 10),  # Body-relative target error vector
+  "dronePlan": (True, 20., 10),          # Desired velocity/position plan
+  "droneCameraState": (True, 20., 10, QueueSize.BIG),  # FPV camera images
+
   # debug
   "uiDebug": (True, 0., 1),
   "testJoystick": (True, 0.),

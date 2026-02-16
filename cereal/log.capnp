@@ -1093,6 +1093,10 @@ struct ModelDataV2 {
   # e2e lateral planner
   action @26: Action;
 
+  # Drone racing: gate detection
+  gates @27 :List(GateData);           # All detected gates in frame
+  nextGate @28 :GateData;              # The next gate to pass through
+
   gpuExecutionTimeDEPRECATED @17 :Float32;
   navEnabledDEPRECATED @22 :Bool;
   locationMonoTimeDEPRECATED @24 :UInt64;
@@ -2512,6 +2516,92 @@ struct Touch {
   value @4 :Int32;
 }
 
+# ========== Drone Racing Structures ==========
+
+struct DroneControl {
+  # Flight control commands for 6-DOF control
+  roll @0 :Float32;        # Target roll angle (deg) or roll rate (deg/s) depending on mode
+  pitch @1 :Float32;       # Target pitch angle (deg) or pitch rate (deg/s)
+  yaw @2 :Float32;         # Target yaw rate (deg/s)
+  throttle @3 :Float32;    # Motor thrust from 0.0 to 1.0
+
+  # Safety and mode control
+  armed @4 :Bool;          # Safety flag to enable/disable motors
+  maneuverType @5 :ManeuverType;
+  feedforwardThrust @6 :Float32;  # Gravity compensation thrust (0.0 to 1.0)
+  timestamp @7 :UInt64;            # Timestamp in microseconds
+
+  enum ManeuverType {
+    stabilized @0;         # Angle mode - self-leveling
+    acro @1;               # Rate mode - racing mode with high agility
+  }
+}
+
+struct DroneState {
+  # 3D position in world frame (meters)
+  position @0 :List(Float32);      # [x, y, z] coordinates
+
+  # 3D velocity in world frame (m/s)
+  velocity @1 :List(Float32);      # [vx, vy, vz] speed vectors
+
+  # Orientation in space (quaternion)
+  attitude @2 :List(Float32);      # [w, x, y, z] quaternion or [roll, pitch, yaw] Euler angles
+
+  # Angular rates (deg/s)
+  angularRates @3 :List(Float32);  # [P, Q, R] rotation rates (critical for racing stability)
+
+  # Power monitoring
+  batteryVoltage @4 :Float32;      # Battery voltage (V)
+  batteryPercent @5 :Float32;      # Battery percentage (0.0 to 1.0)
+
+  # Additional telemetry
+  timestamp @6 :UInt64;            # Timestamp in microseconds
+  armed @7 :Bool;                  # Motor arm state
+  flightMode @8 :Text;             # Current flight mode (e.g., "STABILIZED", "ACRO")
+}
+
+struct GateData {
+  # 3D position of gate relative to drone (meters)
+  gatePosition @0 :List(Float32);     # [x, y, z] relative coordinates
+
+  # Gate physical dimensions (meters)
+  gateDimensions @1 :List(Float32);   # [width, height]
+
+  # Detection confidence
+  confidence @2 :Float32;              # 0.0 to 1.0 probability
+
+  # Gate orientation
+  gateYaw @3 :Float32;                 # Yaw angle of gate relative to drone (radians)
+
+  # Gate ID for tracking
+  gateId @4 :Int32;                    # Unique identifier for this gate (-1 if unknown)
+
+  # Distance to gate
+  distance @5 :Float32;                # Euclidean distance to gate center (meters)
+}
+
+struct TargetObservation {
+  classId @0 :Int16;                # Object class (0 = gate)
+  errorVector @1 :List(Float32);    # [yaw_error, pitch_error, distance] body-relative
+  confidence @2 :Float32;           # Detection confidence (0.0 to 1.0)
+}
+
+struct DronePlan {
+  desiredPosition @0 :List(Float32);   # [x, y, z] target position (world frame)
+  desiredVelocity @1 :List(Float32);   # [vx, vy, vz] desired velocity (world frame)
+  desiredYaw @2 :Float32;              # Desired yaw angle (radians)
+  timestamp @3 :UInt64;                # Timestamp in microseconds
+}
+
+
+struct DroneCameraState {
+  frameId @0 :UInt32;
+  timestamp @1 :UInt64;
+  image @2 :Data;        # Raw RGB bytes (H*W*3)
+  width @3 :UInt16;
+  height @4 :UInt16;
+}
+
 struct Event {
   logMonoTime @0 :UInt64;  # nanoseconds
   valid @67 :Bool = true;
@@ -2607,6 +2697,14 @@ struct Event {
     userBookmark @93 :UserBookmark;
     bookmarkButton @148 :UserBookmark;
     audioFeedback @149 :AudioFeedback;
+
+    # *********** drone racing messages ***********
+    droneControl @150 :DroneControl;
+    droneState @151 :DroneState;
+    gateDetection @152 :List(GateData);
+    targetObservation @153 :TargetObservation;
+    dronePlan @154 :DronePlan;
+    droneCameraState @155 :DroneCameraState;
 
     # *********** debug ***********
     testJoystick @52 :Joystick;
