@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<robot name="quadrotor">
+
+  <!-- Central body -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0043" ixy="0" ixz="0"
+               iyy="0.0043" iyz="0"
+               izz="0.0072"/>
+    </inertial>
+
+    <!-- Visual: central frame box -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.12 0.12 0.04"/>
+      </geometry>
+      <material name="dark_grey">
+        <color rgba="0.3 0.3 0.3 1"/>
+      </material>
+    </visual>
+
+    <!-- Visual: front-left arm (red) -->
+    <visual>
+      <origin xyz="0.085 0.085 0" rpy="0 0 0.785"/>
+      <geometry>
+        <cylinder radius="0.008" length="0.17"/>
+      </geometry>
+      <material name="red">
+        <color rgba="0.8 0.1 0.1 1"/>
+      </material>
+    </visual>
+
+    <!-- Visual: front-right arm (red) -->
+    <visual>
+      <origin xyz="0.085 -0.085 0" rpy="0 0 -0.785"/>
+      <geometry>
+        <cylinder radius="0.008" length="0.17"/>
+      </geometry>
+      <material name="red">
+        <color rgba="0.8 0.1 0.1 1"/>
+      </material>
+    </visual>
+
+    <!-- Visual: rear-left arm (black) -->
+    <visual>
+      <origin xyz="-0.085 0.085 0" rpy="0 0 -0.785"/>
+      <geometry>
+        <cylinder radius="0.008" length="0.17"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1"/>
+      </material>
+    </visual>
+
+    <!-- Visual: rear-right arm (black) -->
+    <visual>
+      <origin xyz="-0.085 -0.085 0" rpy="0 0 0.785"/>
+      <geometry>
+        <cylinder radius="0.008" length="0.17"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1"/>
+      </material>
+    </visual>
+
+    <!-- Visual: rotor disc front-left -->
+    <visual>
+      <origin xyz="0.12 0.12 0.015" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.005"/>
+      </geometry>
+      <material name="rotor">
+        <color rgba="0.5 0.5 0.5 0.5"/>
+      </material>
+    </visual>
+
+    <!-- Visual: rotor disc front-right -->
+    <visual>
+      <origin xyz="0.12 -0.12 0.015" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.005"/>
+      </geometry>
+      <material name="rotor"/>
+    </visual>
+
+    <!-- Visual: rotor disc rear-left -->
+    <visual>
+      <origin xyz="-0.12 0.12 0.015" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.005"/>
+      </geometry>
+      <material name="rotor"/>
+    </visual>
+
+    <!-- Visual: rotor disc rear-right -->
+    <visual>
+      <origin xyz="-0.12 -0.12 0.015" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.005"/>
+      </geometry>
+      <material name="rotor"/>
+    </visual>
+
+    <!-- Collision: simplified single box for full frame footprint -->
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.30 0.30 0.05"/>
+      </geometry>
+    </collision>
+  </link>
+
+</robot>

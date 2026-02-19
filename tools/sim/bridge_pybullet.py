@@ -6,7 +6,7 @@ Enhanced bridge that adds visual gate markers and publishes gateDetection
 messages alongside droneState for the full racing stack.
 
 Architecture:
-  PyBullet World <-> bridge_pybullet.py <-> cereal msgq <-> visiond/plannerd/controld
+  PyBullet World <-> bridge_pybullet.py <-> cereal msgq <-> plannerd/controld
 
 Usage:
   python tools/sim/bridge_pybullet.py [--gui] [--mass 1.0] [--max-thrust 20.0]
@@ -33,7 +33,11 @@ CONTROL_HZ = 100
 SIM_STEPS_PER_CONTROL = int((1.0 / CONTROL_HZ) / SIM_TIMESTEP)
 
 # Gate defaults
-DEFAULT_GATE_POS = [5.0, 0.0, 1.0]
+DEFAULT_GATE_POSITIONS = [
+  [5.0, 0.0, 1.0],
+  [10.0, 2.0, 1.5],
+  [15.0, -1.0, 1.0],
+]
 GATE_WIDTH = 1.5
 GATE_HEIGHT = 1.5
 GATE_DETECTION_HZ_DIVISOR = 5  # publish gate detection every 5th frame (100/5 = 20Hz)
@@ -60,44 +64,74 @@ def setup_pybullet(gui=False):
   return physics_client, drone_id
 
 
-def spawn_gate(position=None):
-  """Create a visual gate marker (orange box) at the given position."""
-  if position is None:
-    position = DEFAULT_GATE_POS
+def spawn_gates(positions=None):
+  """Create visual gate markers at the given positions. Returns list of (gate_id, position)."""
+  if positions is None:
+    positions = DEFAULT_GATE_POSITIONS
 
-  # Gate is a thin box visual marker
-  half_extents = [0.05, GATE_WIDTH / 2.0, GATE_HEIGHT / 2.0]
-  visual_shape = p.createVisualShape(
-    p.GEOM_BOX,
-    halfExtents=half_extents,
-    rgbaColor=[1.0, 0.5, 0.0, 0.8],  # orange, slightly transparent
-  )
-  gate_id = p.createMultiBody(
-    baseMass=0,
-    baseVisualShapeIndex=visual_shape,
-    basePosition=position,
-  )
-  return gate_id, position
+  gates = []
+  for pos in positions:
+    half_extents = [0.05, GATE_WIDTH / 2.0, GATE_HEIGHT / 2.0]
+    visual_shape = p.createVisualShape(
+      p.GEOM_BOX,
+      halfExtents=half_extents,
+      rgbaColor=[1.0, 0.5, 0.0, 0.8],  # orange, slightly transparent
+    )
+    gate_id = p.createMultiBody(
+      baseMass=0,
+      baseVisualShapeIndex=visual_shape,
+      basePosition=pos,
+    )
+    gates.append((gate_id, list(pos)))
+  return gates
 
 
 def apply_control(drone_id, control_msg, mass, max_thrust):
-  """Apply DroneControl commands as forces/torques to the PyBullet body."""
-  throttle = control_msg.throttle
-  roll_torque = control_msg.roll
-  pitch_torque = control_msg.pitch
-  yaw_torque = control_msg.yaw
+  """Apply DroneControl commands with inner-loop attitude stabilization.
 
-  # Thrust always acts along the drone's local Z-axis
-  thrust = throttle * max_thrust
+  control_msg fields:
+    throttle (0-1): upward force along drone's body Z-axis, scaled by max_thrust
+    roll: desired roll angle (degrees)
+    pitch: desired pitch angle (degrees)
+    yaw: desired yaw rate (degrees/s)
+
+  An inner PD loop converts desired angles into appropriate torques,
+  preventing the instability of raw torque application.
+  """
+  # Thrust along body Z-axis
+  thrust = control_msg.throttle * max_thrust
   p.applyExternalForce(drone_id, -1, [0, 0, thrust], [0, 0, 0], p.LINK_FRAME)
 
-  torque_scale = 0.1
-  torque_local = [
-    roll_torque * torque_scale,
-    pitch_torque * torque_scale,
-    yaw_torque * torque_scale,
-  ]
-  p.applyExternalTorque(drone_id, -1, torque_local, p.LINK_FRAME)
+  # Read current attitude and angular velocity for PD control
+  _, orn_xyzw = p.getBasePositionAndOrientation(drone_id)
+  _, ang_vel = p.getBaseVelocity(drone_id)
+  roll, pitch, yaw = p.getEulerFromQuaternion(orn_xyzw)
+
+  # PD gains (tuned for Ixx=Iyy=0.0043, Izz=0.0072)
+  ANGLE_KP = 2.0    # Nm per radian of angle error
+  ANGLE_KD = 0.2    # Nm per rad/s of angular rate
+  YAW_RATE_KP = 0.05  # Nm per rad/s of yaw rate error
+
+  # PD control for roll and pitch angles
+  # Note: controld convention (negative pitch = forward) is opposite to
+  # PyBullet Euler convention (positive pitch = nose down = forward).
+  # Negate both roll and pitch to align conventions.
+  desired_roll = -math.radians(control_msg.roll)
+  desired_pitch = -math.radians(control_msg.pitch)
+  roll_torque = ANGLE_KP * (desired_roll - roll) - ANGLE_KD * ang_vel[0]
+  pitch_torque = ANGLE_KP * (desired_pitch - pitch) - ANGLE_KD * ang_vel[1]
+
+  # P control for yaw rate
+  desired_yaw_rate = math.radians(control_msg.yaw)
+  yaw_torque = YAW_RATE_KP * (desired_yaw_rate - ang_vel[2])
+
+  # Clamp torques to prevent violent oscillations
+  MAX_TORQUE = 0.4
+  roll_torque = max(-MAX_TORQUE, min(MAX_TORQUE, roll_torque))
+  pitch_torque = max(-MAX_TORQUE, min(MAX_TORQUE, pitch_torque))
+  yaw_torque = max(-MAX_TORQUE, min(MAX_TORQUE, yaw_torque))
+
+  p.applyExternalTorque(drone_id, -1, [roll_torque, pitch_torque, yaw_torque], p.LINK_FRAME)
 
 
 def read_state(drone_id):
@@ -136,27 +170,25 @@ def publish_drone_state(pm, state, armed, battery_pct, flight_mode):
   pm.send('droneState', msg)
 
 
-def publish_gate_detection(pm, drone_state, gate_world_pos):
-  """Compute relative gate position from drone and publish gateDetection."""
+def publish_gate_detection(pm, drone_state, gate_positions):
+  """Compute relative gate positions from drone and publish gateDetection."""
   drone_pos = np.array(drone_state['position'])
-  gate_pos = np.array(gate_world_pos)
 
-  # World-frame relative vector
-  rel_world = gate_pos - drone_pos
-  distance = float(np.linalg.norm(rel_world))
+  msg = messaging.new_message('gateDetection', len(gate_positions))
 
-  # Gate yaw relative to drone (angle in XY plane)
-  gate_yaw = math.atan2(rel_world[1], rel_world[0])
+  for i, gate_world_pos in enumerate(gate_positions):
+    gate_pos = np.array(gate_world_pos)
+    rel_world = gate_pos - drone_pos
+    distance = float(np.linalg.norm(rel_world))
+    gate_yaw = math.atan2(rel_world[1], rel_world[0])
 
-  msg = messaging.new_message('gateDetection', 1)
-  gd = msg.gateDetection[0]
-
-  gd.gatePosition = rel_world.tolist()
-  gd.gateDimensions = [GATE_WIDTH, GATE_HEIGHT]
-  gd.confidence = max(0.0, min(1.0, 1.0 - distance / 50.0))
-  gd.gateYaw = gate_yaw
-  gd.gateId = 0
-  gd.distance = distance
+    gd = msg.gateDetection[i]
+    gd.gatePosition = rel_world.tolist()
+    gd.gateDimensions = [GATE_WIDTH, GATE_HEIGHT]
+    gd.confidence = max(0.0, min(1.0, 1.0 - distance / 50.0))
+    gd.gateYaw = gate_yaw
+    gd.gateId = i
+    gd.distance = distance
 
   pm.send('gateDetection', msg)
 
@@ -214,18 +246,26 @@ def main():
   parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI visualization")
   parser.add_argument("--mass", type=float, default=1.0, help="Quadrotor mass in kg")
   parser.add_argument("--max-thrust", type=float, default=20.0, help="Maximum thrust in N")
-  parser.add_argument("--gate-x", type=float, default=5.0, help="Gate X position (m)")
-  parser.add_argument("--gate-y", type=float, default=0.0, help="Gate Y position (m)")
-  parser.add_argument("--gate-z", type=float, default=1.0, help="Gate Z position (m)")
+  parser.add_argument("--gates", type=str, default=None,
+                      help="Gate positions as 'x1,y1,z1;x2,y2,z2;...' (default: 3 gates)")
   args = parser.parse_args()
 
-  gate_pos = [args.gate_x, args.gate_y, args.gate_z]
+  # Parse gate positions
+  if args.gates:
+    gate_positions = []
+    for g in args.gates.split(';'):
+      coords = [float(c) for c in g.strip().split(',')]
+      gate_positions.append(coords)
+  else:
+    gate_positions = [list(g) for g in DEFAULT_GATE_POSITIONS]
 
   print(f"[bridge_pybullet] Starting (mass={args.mass}kg, max_thrust={args.max_thrust}N)")
-  print(f"[bridge_pybullet] Gate at {gate_pos}")
+  print(f"[bridge_pybullet] {len(gate_positions)} gates:")
+  for i, gp in enumerate(gate_positions):
+    print(f"  Gate {i}: [{gp[0]:.1f}, {gp[1]:.1f}, {gp[2]:.1f}]")
 
   physics_client, drone_id = setup_pybullet(gui=args.gui)
-  gate_id, gate_pos = spawn_gate(gate_pos)
+  gates = spawn_gates(gate_positions)
 
   pm = messaging.PubMaster(['droneState', 'gateDetection', 'droneCameraState'])
   sm = messaging.SubMaster(['droneControl'])
@@ -235,6 +275,11 @@ def main():
   armed = True
   battery_pct = 1.0
   battery_drain_rate = 0.0001
+  has_control = False  # True once we've received the first droneControl
+  last_dc = None
+
+  # Hover thrust to apply before controld is online
+  hover_thrust = args.mass * 9.81
 
   print("[bridge_pybullet] Running at 100Hz. Publishing droneState+gateDetection.")
 
@@ -243,12 +288,18 @@ def main():
       sm.update(0)
 
       if sm.updated['droneControl']:
-        dc = sm['droneControl']
-        armed = dc.armed
-        apply_control(drone_id, dc, args.mass, args.max_thrust)
-        battery_pct = max(0.0, battery_pct - dc.throttle * battery_drain_rate / CONTROL_HZ)
+        has_control = True
+        last_dc = sm['droneControl']
+        armed = last_dc.armed
+        battery_pct = max(0.0, battery_pct - last_dc.throttle * battery_drain_rate / CONTROL_HZ)
 
+      # Re-apply forces each sim step (PyBullet clears them after each step)
       for _ in range(SIM_STEPS_PER_CONTROL):
+        if has_control:
+          apply_control(drone_id, last_dc, args.mass, args.max_thrust)
+        else:
+          # No controller online yet — hover thrust so drone doesn't freefall
+          p.applyExternalForce(drone_id, -1, [0, 0, hover_thrust], [0, 0, 0], p.LINK_FRAME)
         p.stepSimulation()
 
       state = read_state(drone_id)
@@ -272,7 +323,8 @@ def main():
 
       # Publish gate detection at 20Hz (every 5th frame)
       if rk.frame % GATE_DETECTION_HZ_DIVISOR == 0:
-        publish_gate_detection(pm, state, gate_pos)
+        all_gate_positions = [gp for _, gp in gates]
+        publish_gate_detection(pm, state, all_gate_positions)
 
       # Capture and publish FPV image at 20Hz
       if rk.frame % FPV_HZ_DIVISOR == 0:

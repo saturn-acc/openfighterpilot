@@ -103,7 +103,7 @@ def main():
   )
   parser.add_argument("--gui", action="store_true",
                       help="Open PyBullet GUI window")
-  parser.add_argument("--controller", choices=["gravity", "dummy", "race"],
+  parser.add_argument("--controller", choices=["gravity", "dummy", "race", "rl"],
                       default="gravity",
                       help="Which flight controller to run (default: gravity)")
   parser.add_argument("--seconds", type=float, default=0,
@@ -210,6 +210,38 @@ def main():
     print("[main] Starting controld...")
     controld = launch("selfdrive.controls.controld", "controld")
     procs.append(controld)
+
+    print("[main] Waiting for droneControl on the bus...", end=" ", flush=True)
+    if wait_for_message("droneControl"):
+      print("OK")
+    else:
+      print("TIMEOUT (continuing anyway)")
+
+  # ------------------------------------------------------------------
+  # Mode 4: rl — bridge + RL policy (no controld)
+  # ------------------------------------------------------------------
+  elif args.controller == "rl":
+    # 1. Start enhanced simulation bridge with gates
+    bridge_argv = []
+    if args.gui:
+      bridge_argv.append("--gui")
+    bridge_argv.extend(["--mass", str(args.mass)])
+    bridge_argv.extend(["--max-thrust", str(args.max_thrust)])
+
+    print("[main] Starting bridge_pybullet (PyBullet sim + gates)...")
+    bridge = launch("tools.sim.bridge_pybullet", "bridge_pybullet", bridge_argv)
+    procs.append(bridge)
+
+    print("[main] Waiting for droneState on the bus...", end=" ", flush=True)
+    if wait_for_message("droneState"):
+      print("OK")
+    else:
+      print("TIMEOUT (continuing anyway)")
+
+    # 2. Start plannerd in RL mode (publishes droneControl directly, no controld)
+    print("[main] Starting plannerd --rl...")
+    plannerd = launch("selfdrive.controls.plannerd", "plannerd", ["--rl"])
+    procs.append(plannerd)
 
     print("[main] Waiting for droneControl on the bus...", end=" ", flush=True)
     if wait_for_message("droneControl"):

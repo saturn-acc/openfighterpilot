@@ -93,7 +93,6 @@ _services: dict[str, tuple] = {
   "droneControl": (True, 100., 10),      # High frequency for flight control
   "droneState": (True, 100., 10),        # High frequency for state telemetry
   "gateDetection": (True, 20., 10),      # Gate detection from vision model
-  "targetObservation": (True, 20., 10),  # Body-relative target error vector
   "dronePlan": (True, 20., 10),          # Desired velocity/position plan
   "droneCameraState": (True, 20., 10, QueueSize.BIG),  # FPV camera images
 

@@ -27,8 +27,8 @@ All inter-process communication uses [cereal](https://github.com/commaai/cereal)
 Race Mode (3-process):
 
   bridge_pybullet ──droneState (100Hz)──────> plannerd, controld
-  bridge_pybullet ──droneCameraState (20Hz)──> [future vision pipeline]
-  bridge_pybullet ──gateDetection (20Hz)────> [future vision pipeline]
+  bridge_pybullet ──droneCameraState (20Hz)──> [future vision model]
+  bridge_pybullet ──gateDetection (20Hz)────> plannerd
   plannerd ────────dronePlan (20Hz)─────────> controld
   controld ────────droneControl (100Hz)─────> bridge_pybullet
 ```
@@ -66,7 +66,7 @@ python main.py --controller race --gui --seconds 20
 |------|-----------|-------------|
 | `gravity` | bridge_drone + gravity_compensator | Hover-only. Compensates for tilt to maintain altitude. |
 | `dummy` | single process | Self-contained demo. Validates cereal message round-trip. |
-| `race` | bridge_pybullet + plannerd + controld | Full stack. Fly-forward planner + PID velocity tracking + FPV camera. |
+| `race` | bridge_pybullet + plannerd + controld | Full stack. Gate-seeking planner + PID velocity tracking + FPV camera. |
 
 ### CLI Options
 
@@ -86,10 +86,9 @@ python main.py [OPTIONS]
 |--------|------|
 | `tools/sim/bridge_pybullet.py` | PyBullet sim with gates, FPV camera (320x240 RGB at 20Hz), chase cam GUI |
 | `tools/sim/bridge_drone.py` | Minimal PyBullet sim (no gates, no camera) |
-| `selfdrive/controls/plannerd.py` | Fly-forward planner: 2 m/s forward + altitude hold at 1m |
+| `selfdrive/controls/plannerd.py` | Gate-seeking planner: proportional control toward detected gates |
 | `selfdrive/controls/controld.py` | PID velocity controller (4 axes) at 100Hz |
 | `selfdrive/controls/gravity_compensator.py` | Tilt-compensated hover: `thrust = mg / cos(tilt)` |
-| `selfdrive/controls/visiond.py` | Gate detection to body-relative error vectors (reserved for future use) |
 | `selfdrive/controls/dummy_planner.py` | Single-process demo (no messaging) |
 | `cereal/log.capnp` | Cap'n Proto schema for all drone messages |
 | `cereal/services.py` | Service registry (frequencies, queue sizes) |
@@ -113,10 +112,9 @@ openfighterpilot/
     log.capnp                      # Message schemas (DroneState, DronePlan, etc.)
     services.py                    # Service frequencies and queue sizes
   selfdrive/controls/
-    plannerd.py                    # Fly-forward planner (20Hz)
+    plannerd.py                    # Gate-seeking planner (20Hz)
     controld.py                    # PID flight controller (100Hz)
     gravity_compensator.py         # Hover controller (100Hz)
-    visiond.py                     # Vision pipeline (future use)
     dummy_planner.py               # Single-process demo
   tools/sim/
     bridge_pybullet.py             # Full sim: physics + gates + FPV camera
@@ -131,8 +129,8 @@ openfighterpilot/
 - [x] PID velocity tracking controller
 - [x] FPV camera publishing (320x240 RGB at 20Hz)
 - [x] Visual gate markers in simulation
-- [ ] YOLOv8 gate detection from FPV images
-- [ ] Vision-based planning (replace dummy fly-forward)
+- [x] Gate-seeking planner with proportional control
+- [ ] Vision-based gate detection from FPV images (replace ground-truth)
 - [ ] Multi-gate race course
 - [ ] Lap timing and scoring
 

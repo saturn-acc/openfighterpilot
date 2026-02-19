@@ -1,6 +1,6 @@
 [project]
 name = "openpilot"
-requires-python = ">= 3.12.3, < 3.13"
+requires-python = ">= 3.12.3"
 license = {text = "MIT License"}
 version = "0.1.0"
 description = "an open source driver assistance system"
@@ -110,6 +110,12 @@ dev = [
 tools = [
   "metadrive-simulator @ https://github.com/commaai/metadrive/releases/download/MetaDrive-minimal-0.4.2.4/metadrive_simulator-0.4.2.4-py3-none-any.whl ; (platform_machine != 'aarch64')",
   "dearpygui>=2.1.0; (sys_platform != 'linux' or platform_machine != 'aarch64')", # not vended for linux aarch64
+]
+
+drone = [
+  "pybullet",
+  "gymnasium",
+  "stable-baselines3",
 ]
 
 [project.urls]

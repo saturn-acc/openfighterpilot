@@ -3,7 +3,6 @@ import pytest
 import signal
 import time
 
-from cereal import car
 from openpilot.common.params import Params
 import openpilot.system.manager.manager as manager
 from openpilot.system.manager.process import ensure_running
@@ -59,8 +58,7 @@ class TestManager:
     HARDWARE.set_power_save(False)
     manager.manager_init()
 
-    CP = car.CarParams.new_message()
-    procs = ensure_running(managed_processes.values(), True, Params(), CP, not_run=BLACKLIST_PROCS)
+    procs = ensure_running(managed_processes.values(), True, Params(), not_run=BLACKLIST_PROCS)
 
     time.sleep(10)
 
