@@ -2,9 +2,10 @@
 """
 Train a SAC policy for drone racing using the PyBullet gym environment.
 
-SAC (Soft Actor-Critic) is an off-policy algorithm that's more sample-efficient
-than PPO for continuous control. It uses entropy regularization to encourage
-exploration and a replay buffer to reuse past experience.
+Uses a custom attention-based feature extractor that groups observations into
+semantic tokens (gate, velocity, attitude, next gate, progress) and applies
+multi-head self-attention so the network learns to dynamically focus on what
+matters — e.g., centering precision near gates vs heading when far away.
 
 Supports curriculum learning: starts with wide gates and shrinks them as the
 policy improves, making it much easier to learn gate-threading behavior.
@@ -25,32 +26,135 @@ _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _project_root not in sys.path:
   sys.path.insert(0, _project_root)
 
+import gymnasium as gym
 import numpy as np
+import torch
+import torch.nn as nn
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from tools.sim.gym_drone import DroneEnv, GATE_W, GATE_H
 
 MODEL_DIR = "selfdrive/controls/models"
 
 # Curriculum stages: (gate_w, gate_h, min_reward_to_advance)
-# Start with big easy gates, shrink as policy learns to thread them
 CURRICULUM_STAGES = [
-  (4.0, 4.0, 100.0),    # Stage 0: huge gates — learn basic navigation
-  (3.0, 3.0, 120.0),    # Stage 1: large gates — refine approach
-  (2.25, 2.25, 100.0),  # Stage 2: medium gates — learn precision
-  (GATE_W, GATE_H, None),  # Stage 3: real size (1.5m) — final polish
+  (4.0, 4.0, 100.0),
+  (3.0, 3.0, 120.0),
+  (2.25, 2.25, 100.0),
+  (GATE_W, GATE_H, None),
 ]
+
+# Observation token groups (indices into the 15-element obs vector):
+#   [0:4]   current gate: dx, dy, dz, yaw_err
+#   [4:7]   velocity: vx, vy, vz
+#   [7:9]   attitude: roll, pitch
+#   [9:13]  next gate: dx, dy, dz, yaw_err
+#   [13:15] progress: progress, speed
+OBS_TOKEN_SLICES = [(0, 4), (4, 7), (7, 9), (9, 13), (13, 15)]
+NUM_TOKENS = len(OBS_TOKEN_SLICES)
+
+
+class AttentionExtractor(BaseFeaturesExtractor):
+  """Groups obs into semantic tokens, projects to embeddings, applies self-attention.
+
+  Observation (15 elements) is split into 5 tokens:
+    - Current gate (4): relative position + yaw error
+    - Velocity (3): world-frame velocity
+    - Attitude (2): roll, pitch
+    - Next gate (4): lookahead for turn anticipation
+    - Progress (2): course progress + speed
+
+  Each token is projected to a common embedding dim, then multi-head self-attention
+  lets the network learn dynamic weighting — e.g., attend more to gate centering when
+  close, more to velocity/heading when far.
+  """
+
+  def __init__(self, observation_space: gym.spaces.Box, embed_dim: int = 32,
+               num_heads: int = 2, num_layers: int = 2):
+    # Output features = NUM_TOKENS * embed_dim (flattened after attention)
+    features_dim = NUM_TOKENS * embed_dim
+    super().__init__(observation_space, features_dim=features_dim)
+
+    self.embed_dim = embed_dim
+    self.token_slices = OBS_TOKEN_SLICES
+
+    # Per-token linear projection to common embedding dim
+    self.token_projections = nn.ModuleList([
+      nn.Sequential(
+        nn.Linear(end - start, embed_dim),
+        nn.ReLU(),
+      )
+      for start, end in self.token_slices
+    ])
+
+    # Learnable positional encoding (one per token)
+    self.pos_encoding = nn.Parameter(torch.randn(1, NUM_TOKENS, embed_dim) * 0.02)
+
+    # Transformer encoder (self-attention layers)
+    encoder_layer = nn.TransformerEncoderLayer(
+      d_model=embed_dim,
+      nhead=num_heads,
+      dim_feedforward=embed_dim * 4,
+      dropout=0.0,
+      activation="gelu",
+      batch_first=True,
+    )
+    self.attention = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    # Layer norm on output
+    self.out_norm = nn.LayerNorm(features_dim)
+
+  def forward(self, observations: torch.Tensor) -> torch.Tensor:
+    batch_size = observations.shape[0]
+
+    # Split obs into tokens and project each to embed_dim
+    tokens = []
+    for i, (start, end) in enumerate(self.token_slices):
+      token_input = observations[:, start:end]
+      token_embed = self.token_projections[i](token_input)
+      tokens.append(token_embed)
+
+    # Stack into (batch, num_tokens, embed_dim) and add positional encoding
+    x = torch.stack(tokens, dim=1) + self.pos_encoding
+
+    # Self-attention
+    x = self.attention(x)
+
+    # Flatten tokens into single feature vector
+    x = x.reshape(batch_size, -1)
+    x = self.out_norm(x)
+    return x
+
+
+class CheckpointCallback(BaseCallback):
+  """Save the model every N seconds (default: 1 hour)."""
+
+  def __init__(self, save_dir, save_interval_sec=3600, verbose=1):
+    super().__init__(verbose)
+    self.save_dir = save_dir
+    self.save_interval_sec = save_interval_sec
+    self.last_save_time = None
+
+  def _on_training_start(self):
+    import time
+    self.last_save_time = time.time()
+
+  def _on_step(self) -> bool:
+    import time
+    now = time.time()
+    if now - self.last_save_time >= self.save_interval_sec:
+      path = os.path.join(self.save_dir, f"checkpoint_{self.num_timesteps}")
+      self.model.save(path)
+      self.last_save_time = now
+      if self.verbose:
+        print(f"\n[checkpoint] Saved at {self.num_timesteps} steps → {path}.zip")
+    return True
 
 
 class CurriculumCallback(BaseCallback):
-  """Shrink gates when eval reward exceeds the stage threshold.
-
-  Checks the rolling mean reward every `check_freq` steps. When it exceeds
-  the threshold for the current stage for `patience` consecutive checks,
-  advances to the next stage (smaller gates). Both the train and eval envs
-  are updated simultaneously.
-  """
+  """Shrink gates when eval reward exceeds the stage threshold."""
 
   def __init__(self, train_env, eval_env, check_freq=20_000, patience=3, verbose=1):
     super().__init__(verbose)
@@ -61,8 +165,6 @@ class CurriculumCallback(BaseCallback):
     self.stage = 0
     self.above_count = 0
     self.recent_rewards = []
-
-    # Apply initial stage
     self._set_stage(0)
 
   def _set_stage(self, stage_idx):
@@ -75,17 +177,15 @@ class CurriculumCallback(BaseCallback):
       print(f"\n[curriculum] Stage {stage_idx}: gate size {w:.1f}x{h:.1f}m")
 
   def _on_step(self) -> bool:
-    # Collect episode rewards from the monitor
     if len(self.model.ep_info_buffer) > 0:
       self.recent_rewards = [ep["r"] for ep in self.model.ep_info_buffer]
 
     if self.num_timesteps % self.check_freq != 0:
       return True
 
-    # Check if we should advance
     threshold = CURRICULUM_STAGES[self.stage][2]
     if threshold is None:
-      return True  # final stage, no advancing
+      return True
 
     if len(self.recent_rewards) < 5:
       return True
@@ -129,8 +229,13 @@ def main():
   env = DroneEnv(gui=False, gate_w=init_w, gate_h=init_h)
   eval_env = DroneEnv(gui=args.gui, gate_w=init_w, gate_h=init_h)
 
-  # SAC uses separate networks for actor (pi) and critic (qf)
-  policy_kwargs = dict(net_arch=dict(pi=[256, 256], qf=[256, 256]))
+  # Custom attention extractor + MLP heads for actor/critic
+  policy_kwargs = dict(
+    features_extractor_class=AttentionExtractor,
+    features_extractor_kwargs=dict(embed_dim=32, num_heads=2, num_layers=2),
+    net_arch=dict(pi=[256, 128], qf=[256, 128]),
+    share_features_extractor=False,  # actor and critic get their own attention
+  )
 
   if args.resume:
     resume_path = os.path.join(MODEL_DIR, "best_model.zip")
@@ -154,7 +259,15 @@ def main():
       device="cpu",
     )
 
+  # Print architecture
+  total_params = sum(p.numel() for p in model.policy.parameters())
+  print(f"[train] Attention-based SAC policy: {total_params:,} parameters")
+
   callbacks = []
+
+  # Save checkpoint every hour so killing the process doesn't lose progress
+  ckpt_cb = CheckpointCallback(MODEL_DIR, save_interval_sec=3600)
+  callbacks.append(ckpt_cb)
 
   eval_cb = EvalCallback(
     eval_env,

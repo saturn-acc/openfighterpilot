@@ -1,0 +1,20 @@
+# OpenFighterPilot - Drone Racing
+# Install: pip install -r requirements.txt
+
+# RL training & inference
+stable-baselines3>=2.7
+gymnasium>=1.0
+torch>=2.0
+numpy>=2.0
+
+# Physics simulation
+pybullet>=3.2
+
+# Cereal messaging (IPC)
+pycapnp==2.1.0
+
+# System / process management
+setproctitle
+psutil
+sentry-sdk
+zstandard
