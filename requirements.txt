@@ -1,5 +1,9 @@
 # OpenFighterPilot - Drone Racing
 # Install: pip install -r requirements.txt
+#
+# Note: pybullet requires a C++ compiler (build-essential on Linux,
+# Xcode CLI tools on macOS: xcode-select --install)
+# For Docker, use the provided Dockerfile which handles all deps.
 
 # RL training & inference
 stable-baselines3>=2.7
